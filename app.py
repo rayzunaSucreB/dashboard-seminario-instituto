@@ -29,10 +29,9 @@ if insc is None:
 # Preparación de datos
 insc['Age'] = pd.to_numeric(insc.get('Age', None), errors='coerce')
 insc['Confirmation Date'] = pd.to_datetime(insc.get('Confirmation Date', None), errors='coerce')
-insc['Last Attended'] = pd.to_datetime(insc.get('Last Attended Week Date', None), errors='coerce')
 
-stake_col = next((col for col in ['Stake - District', 'Stake'] if col in insc.columns), None)
-ward_col = next((col for col in ['Ward - Branch', 'Ward'] if col in insc.columns), None)
+stake_col = next((col for col in ['Stake - District', 'Stake'] if col in insc.columns), 'Stake - District')
+ward_col = next((col for col in ['Ward - Branch', 'Ward'] if col in insc.columns), 'Ward - Branch')
 
 def get_grupo(row):
     age = row.get('Age')
@@ -47,41 +46,52 @@ def get_grupo(row):
 
 insc['Grupo'] = insc.apply(get_grupo, axis=1)
 
-# Filtros en sidebar con cascada
+# Filtros cascada
 st.sidebar.header("🔎 Filtros")
-if stake_col:
-    all_stakes = sorted(insc[stake_col].dropna().unique())
-    selected_stakes = st.sidebar.multiselect("Estaca / Distrito", all_stakes, default=all_stakes)
-    
-    # Filtrar barrios según estacas seleccionadas
-    filtered_wards = insc[insc[stake_col].isin(selected_stakes)][ward_col].dropna().unique()
-    selected_wards = st.sidebar.multiselect("Barrio / Rama", sorted(filtered_wards), default=filtered_wards)
-else:
-    selected_stakes = []
-    selected_wards = []
+all_stakes = sorted(insc[stake_col].dropna().unique()) if stake_col in insc.columns else []
+selected_stakes = st.sidebar.multiselect("Estaca / Distrito", all_stakes, default=all_stakes)
 
-# Aplicar filtros
-df = insc.copy()
-if selected_stakes:
-    df = df[df[stake_col].isin(selected_stakes)]
-if selected_wards and ward_col:
-    df = df[df[ward_col].isin(selected_wards)]
+filtered_df = insc[insc[stake_col].isin(selected_stakes)] if selected_stakes else insc
+all_wards = sorted(filtered_df[ward_col].dropna().unique()) if ward_col in filtered_df.columns else []
+selected_wards = st.sidebar.multiselect("Barrio / Rama", all_wards, default=all_wards)
+
+df = filtered_df[filtered_df[ward_col].isin(selected_wards)] if selected_wards else filtered_df
 
 # Solo rangos deseados
 df = df[(df['Age'] >= 13) & (df['Age'] <= 35)]
 
 # Pestañas
-tabs = st.tabs(["📈 Resumen", "👥 Grupos", "👤 Conversos", "📋 Listas", "🔄 No Volvieron 2026", "📤 Exportar"])
+tabs = st.tabs(["📈 Resumen", "👥 Grupos", "📋 Listas", "🔄 No Volvieron 2026", "📤 Exportar"])
 
 with tabs[0]:
-    st.header("Resumen")
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Total Actual", len(df))
-    c2.metric("Seminarios", len(df[df['Age']<=17]))
-    c3.metric("Institutos", len(df[df['Age']>=18]))
+    st.header("Resumen General")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Filtrado", len(df))
+    c2.metric("Seminarios (13-17)", len(df[df['Age'] <= 17]))
+    c3.metric("Institutos (18-35)", len(df[df['Age'] >= 18]))
 
-with tabs[4]:
+with tabs[3]:
     st.header("🔄 Quiénes No Volvieron en 2026")
     if pot is not None:
         pot['Last Attended'] = pd.to_datetime(pot.get('Last Attended Week Date', None), errors='coerce')
-        pot['Year_2025'] =
+        pot['Year_2025'] = pot['Last Attended'].dt.year == 2025
+        
+        nombres_insc = set(df['Student Name'].astype(str).str.lower().str.strip())
+        no_volvieron = pot[
+            (pot['Year_2025'] == True) & 
+            ~pot['Student Name'].astype(str).str.lower().str.strip().isin(nombres_insc)
+        ]
+        
+        st.success(f"**Asistieron en 2025 pero no volvieron en 2026: {len(no_volvieron)}**")
+        st.dataframe(no_volvieron[['Student Name', 'Age', 'Sex', 'Last Attended', stake_col, ward_col]].head(50))
+    else:
+        st.info("Sube Potenciales.xlsx para ver esta comparación")
+
+with tabs[4]:
+    st.header("Exportar")
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+    st.download_button("⬇️ Descargar datos actuales", output.getvalue(), "Dashboard_Actual.xlsx")
+
+st.caption("Dashboard para Raimundo Zuna - S&I Bolivia")
